@@ -1,12 +1,14 @@
 // ==UserScript==
 // @name         Oneapi Model生成ts类型
 // @namespace    http://tampermonkey.net/
-// @version      0.1
+// @version      0.2
 // @description  Oneapi Model生成ts类型
 // @author       孤独的二向箔
 // @match        https://oneapi.alibaba-inc.com/*/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=tampermonkey.net
 // @grant        none
+// @updateURL    https://raw.githubusercontent.com/DophinL/userScripts/master/oneapiEnhance.js
+// @downloadURL  https://raw.githubusercontent.com/DophinL/userScripts/master/oneapiEnhance.js
 // @require      https://cdn.bootcss.com/jquery/3.6.0/jquery.min.js
 // ==/UserScript==
 
