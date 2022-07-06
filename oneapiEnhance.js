@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Oneapi Model生成ts类型
 // @namespace    http://tampermonkey.net/
-// @version      0.3
+// @version      0.4
 // @description  Oneapi Model生成ts类型
 // @author       孤独的二向箔
 // @match        https://oneapi.alibaba-inc.com/*/*
