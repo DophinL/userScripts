@@ -195,7 +195,6 @@
 
   function onMutation(mutationList) {
     mutationList.forEach((mutation) => {
-      // 新增或删除节点
       if (mutation.type === 'childList' && !!mutation.addedNodes.length > 0) {
         const curPageTitle = document.querySelector('.next-card-head-main .next-card-title')?.textContent || '';
         // 如果不是模型基本信息页面，则不作任何处理
@@ -209,7 +208,6 @@
 
         const paramsStr = Object.entries(params).map(([key, val]) => `${key}=${encodeURIComponent(val)}`).join('&');
 
-        // 希望每次进入到模型页面，能执行一次
         fetch(`/api/oneapi/query/withManual?${paramsStr}`).then((res) => res.json()).then((res) => {
           jsonSchema = res.content.map((str) => JSON.parse(str));
         });
