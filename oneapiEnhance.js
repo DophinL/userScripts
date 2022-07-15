@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Oneapi Model生成ts类型
 // @namespace    http://tampermonkey.net/
-// @version      0.4
+// @version      0.5
 // @description  Oneapi Model生成ts类型
 // @author       孤独的二向箔
 // @match        https://oneapi.alibaba-inc.com/*/*
@@ -34,6 +34,12 @@
     return Object.fromEntries(new URLSearchParams(location.search));
   }
 
+  function getTypeName(refId) {
+    const arr = refId.split('.');
+
+    return arr[arr.length - 1];
+  }
+
   class NormalFieldTemplate {
     constructor(params) {
       this.type = params.type;
@@ -63,8 +69,8 @@
       this.fields.push(...fields);
     }
 
-    generateTemplate(showComment = true) {
-      return `${makeComment(this.comment, showComment)}${this.key ? `${this.key}?: ` : ''}{
+    generateTemplate(showComment = true, showKey = true) {
+      return `${makeComment(this.comment, showComment)}${this.key && showKey ? `${this.key}?: ` : ''}{
       ${this.fields.map((field) => field.generateTemplate()).join('\n')}
   }`;
     }
@@ -87,6 +93,39 @@
     }
   }
 
+  class RefTemplate {
+    constructor(params) {
+      this.name = params.name;
+      this.comment = params.comment;
+      this.key = params.key;
+      this.field = null;
+      this.id = params.id;
+    }
+
+    // 必然是object field
+    addSelfField(objectField) {
+      this.field = objectField;
+    }
+
+    generateTemplate(showComment = true) {
+      return `${makeComment(this.comment, showComment)}${this.key ? `${this.key}?: ` : ''}${this.name}`;
+    }
+
+    exportTemplate(showComment = true) {
+      return `${makeComment(this.comment, showComment)}export interface ${this.name} ${this.field.generateTemplate(false, false)}`;
+    }
+
+    clone(key) {
+      return new RefTemplate({
+        name: this.name,
+        comment: this.comment,
+        field: this.field,
+        id: this.id,
+        key: key || this.key
+      })
+    }
+  }
+
   function getAddress(addressStr) {
     const arr = addressStr.split('/');
     return arr.slice(1);
@@ -100,95 +139,157 @@
     return target;
   }
 
-  function genArrayTemplate(schema, key, allSchema) {
-    const arrayTemplate = new ArrayTemplate({
-      key,
-      comment: schema.description,
-    });
-
-    // 这种必然是object的情况
-    if (schema.items.$ref) {
-      // eslint-disable-next-line
-      const objectTemplate = generateRefTemplate(allSchema, schema.items.$ref);
-      arrayTemplate.addField(objectTemplate);
-    } else if (schema.items.type) {
-      // 到这里一定是普通类型
-      const normalFieldTemplate = new NormalFieldTemplate({
-        type: schema.items.type,
-      });
-      arrayTemplate.addField(normalFieldTemplate);
+  class ModelTsGenerator {
+    constructor(params) {
+      this.schema = params.schema;
+      this.tempRefTemplates = [];
     }
 
-    return arrayTemplate;
-  }
+    getExistRefTemplateByRefKey(refKey) {
+      return this.tempRefTemplates.find(t => t.id === refKey);
+    }
 
-  function genObjectTemplate(schema, key, allSchema, showComment = true) {
-    const objectTemplate = new ObjectTemplate({
-      comment: showComment ? schema.description : '',
-      key,
-    });
+    getObjectSchemaByRefKey(allSchema, refKey) {
+      const address = getAddress(refKey);
+      let targetSchema;
+      allSchema.some((controller) => {
+        targetSchema = getValueByFields(controller, address);
 
-    if (schema.$ref) {
-      // const ref = getValueByFields(schema, targetSchema.$ref);
-      // eslint-disable-next-line
-      return generateRefTemplate(allSchema, schema.$ref, key);
-    } if (schema.properties) {
-      Object.entries(schema.properties).forEach(([subKey, value]) => {
-        if (value.type === 'object') {
-          const nextLevelObjectTemplate = genObjectTemplate(value, subKey, allSchema);
-          objectTemplate.addField(nextLevelObjectTemplate);
-        } else if (value.type === 'array') {
-          const nextLevelArrayTemplate = genArrayTemplate(value, subKey, allSchema);
-          objectTemplate.addField(nextLevelArrayTemplate);
+        return !!targetSchema;
+      });
+
+      if (!targetSchema) throw new Error('schema不存在');
+
+      return targetSchema;
+    }
+
+    genObjectTemplateByRefKey(schema, refKey, key = '') {
+      const targetSchema = getObjectSchemaByRefKey(schema, refKey);
+
+      const objectTemplate = this.genObjectTemplate(targetSchema, key, schema, false);
+
+      return objectTemplate;
+    }
+
+    genObjectTemplateBySchema(selfSchema, allSchema, key = '') {
+      const objectTemplate = this.genObjectTemplate(selfSchema, key, allSchema, false);
+
+      return objectTemplate;
+    }
+
+    genArrayTemplate(schema, key, allSchema) {
+      const arrayTemplate = new ArrayTemplate({
+        key,
+        comment: schema.description,
+      });
+
+      // 这种必然是object的情况
+      if (schema.items.$ref) {
+        const existRefTemplate = this.getExistRefTemplateByRefKey(schema.items.$ref);
+
+        if (existRefTemplate) {
+          arrayTemplate.addField(existRefTemplate);
         } else {
-          // 普通字段
-          const normalFieldTemplate = new NormalFieldTemplate({
-            key: subKey,
-            type: value.type,
-            comment: value.description,
+          const objectSchema = this.getObjectSchemaByRefKey(allSchema, schema.items.$ref);
+          const refTemplate = new RefTemplate({
+            id: schema.items.$ref,
+            name: getTypeName(schema.items.$ref),
+            comment: objectSchema.description
           });
+          this.tempRefTemplates.push(refTemplate);
 
-          objectTemplate.addField(normalFieldTemplate);
+          const objectTemplate = this.genObjectTemplateBySchema(objectSchema, allSchema);
+          refTemplate.addSelfField(objectTemplate);
+          arrayTemplate.addField(refTemplate);
         }
-      });
+      } else if (schema.items.type) {
+        // 到这里一定是普通类型
+        const normalFieldTemplate = new NormalFieldTemplate({
+          type: schema.items.type,
+        });
+        arrayTemplate.addField(normalFieldTemplate);
+      }
+
+      return arrayTemplate;
     }
 
-    return objectTemplate;
-  }
+    // 可能生成refTemplate
+    genObjectTemplate(schema, key, allSchema, showComment = true) {
+      const objectTemplate = new ObjectTemplate({
+        comment: showComment ? schema.description : '',
+        key,
+      });
 
-  function generateRefTemplate(schema, refKey, key = '') {
-    const address = getAddress(refKey);
-    let targetSchema;
-    schema.some((controller) => {
-      targetSchema = getValueByFields(controller, address);
+      if (schema.$ref) {
+        const existRefTemplate = this.getExistRefTemplateByRefKey(schema.$ref);
 
-      return !!targetSchema;
-    });
+        if (existRefTemplate) {
+          // 如果沿用老key，可能会出现不同字段相同引用，但最终却产生了重复key的情况。
+          return existRefTemplate.clone(key);
+        } else {
+          const objectSchema = this.getObjectSchemaByRefKey(allSchema, schema.$ref);
+          const refTemplate = new RefTemplate({
+            id: schema.$ref,
+            name: getTypeName(schema.$ref),
+            comment: objectSchema.description,
+            key
+          });
+          this.tempRefTemplates.push(refTemplate);
 
-    if (!targetSchema) throw new Error('schema不存在');
+          const objTemplate = this.genObjectTemplateBySchema(objectSchema, allSchema, key);
 
-    const objectTemplate = genObjectTemplate(targetSchema, key, schema, false);
+          refTemplate.addSelfField(objTemplate);
 
-    return objectTemplate;
-  }
+          return refTemplate;
+        }
+      } if (schema.properties) {
+        Object.entries(schema.properties).forEach(([subKey, value]) => {
+          if (value.type === 'object') {
+            const nextLevelObjectTemplate = this.genObjectTemplate(value, subKey, allSchema);
+            objectTemplate.addField(nextLevelObjectTemplate);
+          } else if (value.type === 'array') {
+            const nextLevelArrayTemplate = this.genArrayTemplate(value, subKey, allSchema);
+            objectTemplate.addField(nextLevelArrayTemplate);
+          } else {
+            // 普通字段
+            const normalFieldTemplate = new NormalFieldTemplate({
+              key: subKey,
+              type: value.type,
+              comment: value.description,
+            });
 
-  function genTypeExport(t, typeName = 'NewType') {
-    return `export type ${typeName} = ${t.generateTemplate()}`;
-  }
+            objectTemplate.addField(normalFieldTemplate);
+          }
+        });
+      }
 
-  /**
-* 用此方法可以获取oneapi模型的ts类型
-* 比如 genTypeById(schema, 'com.alibaba.rhino.biz.ao.order.agent.CreateOrderAO')
-* @param schema oneapi的全量schema，可以在oneapi应用右上角点击「查看schema」并复制
-* @param id 模型标识
-*/
-  function genModelTypeById(schema, id) {
-    const refTemplate = generateRefTemplate(schema, `#/components/models/${id}`);
-    const arr = id.split('.');
+      return objectTemplate;
+    }
 
-    const typeName = arr[arr.length - 1];
+    generate(refKey) {
+      this.tempRefTemplates = [];
 
-    return genTypeExport(refTemplate, typeName);
+      const objectSchema = this.getObjectSchemaByRefKey(this.schema, refKey);
+      const refTemplate = new RefTemplate({
+        id: refKey,
+        name: getTypeName(refKey),
+        comment: objectSchema.description
+      });
+
+      this.tempRefTemplates.push(refTemplate);
+
+      const objectTemplate = this.genObjectTemplateBySchema(objectSchema, this.schema);
+
+      refTemplate.addSelfField(objectTemplate);
+
+      // 需要先去重，可能有重复引用。
+      const tsTypesStr = this.tempRefTemplates.map(t => {
+        return t.exportTemplate();
+      }).join('\n\n');
+
+      this.tempRefTemplates = [];
+      return tsTypesStr;
+    }
   }
 
   let jsonSchema;
@@ -216,7 +317,9 @@
           const id = $(target).siblings().get(0).textContent.trim();
           let tsTypes;
           try {
-            tsTypes = genModelTypeById(jsonSchema, id);
+            const generator = new ModelTsGenerator({ schema: jsonSchema });
+            tsTypes = generator.generate(`#/components/models/${id}`)
+            // tsTypes = genModelTypeById(jsonSchema, id);
           } catch (err) {
             console.error(err);
             alert('生成类型出错，请联系作者');
